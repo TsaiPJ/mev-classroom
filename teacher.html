@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>教師控制｜Microbial EVs 課堂問答</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body class="teacher">
+
+<main id="login-view" class="login-shell">
+  <div class="panel">
+    <div class="eyebrow">教師登入</div>
+    <h1>Microbial EVs 課堂問答</h1>
+    <form id="login-form">
+      <label>教師 Email<input id="email" type="email" autocomplete="username" required></label>
+      <label>密碼<input id="password" type="password" autocomplete="current-password" required></label>
+      <button type="submit" id="login-btn">登入</button>
+    </form>
+    <p id="login-message" class="message" role="status"></p>
+    <p class="hint">使用與課堂簽到簿相同的教師帳號。</p>
+  </div>
+</main>
+
+<main id="teacher-view" class="teacher-shell hidden">
+  <header class="teacher-head">
+    <div>
+      <div class="eyebrow">教師控制台</div>
+      <h1 id="course-title">Microbial EVs 課堂問答</h1>
+      <p>選題、設定時間並開放作答。學生答案即時保存於 Firestore。</p>
+    </div>
+    <div class="teacher-actions">
+      <button class="secondary" id="scores">下載成績 CSV</button>
+      <button class="secondary" id="answers-csv">下載逐題答案 CSV</button>
+      <button class="secondary" id="logout">登出</button>
+    </div>
+  </header>
+
+  <div class="teacher-grid">
+    <section class="panel join-card">
+      <div class="section-title"><h2>學生加入</h2><span id="student-count" class="badge">0 人</span></div>
+      <div id="qr"></div>
+      <a id="join-link" href="./" target="_blank" rel="noopener"></a>
+      <p>投影此 QR code 給同學掃描。本頁網址請勿分享。</p>
+      <div class="roster" id="roster"></div>
+    </section>
+
+    <section class="panel control-card">
+      <div class="section-title"><h2>出題控制</h2><span id="room-status" class="badge">未開放</span></div>
+      <label>選擇題目<select id="question-select"></select></label>
+      <div class="time-row">
+        <label>作答時間（秒）<input id="duration" type="number" min="10" max="600" value="45"></label>
+        <div><button id="open">開放作答</button><button id="close" class="secondary">立即截止</button></div>
+      </div>
+      <div id="current-question" class="current-question">尚未選題</div>
+      <p id="admin-message" class="message" role="status"></p>
+    </section>
+  </div>
+
+  <section class="panel results">
+    <div class="section-title"><h2>即時結果</h2><span id="answer-count" class="badge">0 人作答</span></div>
+    <div id="result-list" class="result-list">尚無作答結果</div>
+  </section>
+
+  <section class="panel cloud-panel">
+    <div class="section-title">
+      <h2>文字雲紀錄</h2>
+      <div class="cloud-actions">
+        <button id="cloud-pre" class="secondary active">課前</button>
+        <button id="cloud-post" class="secondary">課後</button>
+        <button id="save-cloud" class="secondary">儲存文字雲 PNG</button>
+      </div>
+    </div>
+    <canvas id="cloud" width="1000" height="480" aria-label="學生回答文字雲"></canvas>
+    <p>文字雲答案存在 Firestore，課後任何時間重開本頁都查得到，也可從逐題答案 CSV 查閱。</p>
+  </section>
+
+  <footer>資料儲存於 Firebase（Firestore）。關掉本頁不影響已作答資料；但關掉後就沒有人能開放下一題。</footer>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="firebase-config.js"></script>
+<script src="questions.js"></script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged }
+  from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, query, where, getDocs,
+         serverTimestamp, Timestamp }
+  from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+const $ = id => document.getElementById(id);
+const ROOM = window.MEV_ROOM_ID;
+const QUESTIONS = window.MEV_QUESTIONS;
+const BY_ID = window.MEV_BY_ID;
+if (window.MEV_COURSE_TITLE) $("course-title").textContent = window.MEV_COURSE_TITLE + " 課堂問答";
+
+const app = initializeApp(window.MEV_FIREBASE_CONFIG);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const roomRef = doc(db, "mevQuiz", ROOM);
+const keyRef = doc(db, "mevQuiz", ROOM, "meta", "key");
+const studentsCol = collection(db, "mevQuiz", ROOM, "students");
+const answersCol = collection(db, "mevQuiz", ROOM, "answers");
+
+let room = null, answerKey = {}, cloudPhase = "pre";
+let unsubResults = null, unsubCloud = null, autoClosing = false;
+
+// ── 登入 ──────────────────────────────────────────────────────────────────
+$("login-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  $("login-btn").disabled = true;
+  $("login-message").className = "message";
+  $("login-message").textContent = "登入中…";
+  try {
+    await signInWithEmailAndPassword(auth, $("email").value.trim(), $("password").value);
+  } catch (err) {
+    $("login-message").className = "message error";
+    $("login-message").textContent = ({
+      "auth/invalid-credential": "帳號或密碼錯誤",
+      "auth/invalid-email": "Email 格式不正確",
+      "auth/too-many-requests": "嘗試次數過多，請稍後再試",
+    })[err.code] || ("登入失敗：" + err.code);
+  } finally { $("login-btn").disabled = false; }
+});
+$("logout").onclick = () => signOut(auth).then(() => location.reload());
+
+onAuthStateChanged(auth, user => {
+  if (!user) { $("login-view").classList.remove("hidden"); $("teacher-view").classList.add("hidden"); return; }
+  $("login-view").classList.add("hidden");
+  $("teacher-view").classList.remove("hidden");
+  start();
+});
+
+// ── 啟動 ──────────────────────────────────────────────────────────────────
+function start() {
+  const studentUrl = new URL("./", location.href).href;
+  $("join-link").href = studentUrl;
+  $("join-link").textContent = studentUrl;
+  $("qr").replaceChildren();
+  new QRCode($("qr"), { text: studentUrl, width: 220, height: 220, correctLevel: QRCode.CorrectLevel.M });
+
+  const sel = $("question-select");
+  sel.replaceChildren();
+  for (const q of QUESTIONS) {
+    const o = document.createElement("option");
+    o.value = q.id;
+    o.textContent = `${q.phase === "pre" ? "課前" : "課後"} ${q.id.replace(/\D/g, "") || "文字雲"}｜${q.text}`;
+    sel.append(o);
+  }
+
+  getDoc(keyRef).then(s => { answerKey = (s.exists() && s.data().correct) || {}; })
+    .catch(() => { answerKey = {}; })
+    .finally(() => {
+      // 正解晚一步抵達：重新掛載一次即時結果，讓 ✓ 標示出現
+      if (room) { watchedQid = null; watchResults(room.questionId); }
+      if (!Object.keys(answerKey).length)
+        $("admin-message").textContent = "尚未匯入正解（請先開啟 setup.html 執行一次），即時結果不會標示 ✓，成績 CSV 也無法計分。";
+    });
+
+  onSnapshot(roomRef, snap => { room = snap.exists() ? snap.data() : null; renderRoom(); },
+    err => { $("admin-message").className = "message error"; $("admin-message").textContent = "讀取房間狀態失敗：" + err.code; });
+
+  onSnapshot(studentsCol, snap => {
+    $("student-count").textContent = `${snap.size} 人`;
+    const names = snap.docs.map(d => d.data()).sort((a, b) => (a.sid > b.sid ? 1 : -1));
+    $("roster").replaceChildren(...names.map(s => {
+      const el = document.createElement("span"); el.textContent = `${s.sid} ${s.name}`; return el;
+    }));
+  });
+
+  watchCloud();
+}
+
+function remainingSec() {
+  if (!room || !room.isOpen || !room.endsAt) return 0;
+  return Math.max(0, Math.ceil((room.endsAt.toMillis() - Date.now()) / 1000));
+}
+function isOpen() { return !!(room && room.isOpen && remainingSec() > 0); }
+
+function renderRoom() {
+  if (!room) { $("current-question").textContent = "尚未選題"; return; }
+  const q = BY_ID[room.questionId];
+  $("room-status").textContent = isOpen() ? `作答中 · ${remainingSec()} 秒` : "未開放";
+  $("current-question").textContent = q ? `${q.phase === "pre" ? "課前" : "課後"}｜${q.text}` : "尚未選題";
+  watchResults(room.questionId);
+}
+
+// ── 出題控制 ──────────────────────────────────────────────────────────────
+$("open").onclick = async () => {
+  const qid = $("question-select").value;
+  const duration = Number($("duration").value);
+  if (!BY_ID[qid] || !(duration >= 10 && duration <= 600)) { msg("請選擇題目與 10–600 秒的時間", true); return; }
+  try {
+    await setDoc(roomRef, {
+      questionId: qid, isOpen: true,
+      openedAt: serverTimestamp(),
+      endsAt: Timestamp.fromMillis(Date.now() + duration * 1000),
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
+    msg(`已開放「${BY_ID[qid].text.slice(0, 18)}…」，${duration} 秒`);
+  } catch (err) { msg("開放失敗：" + err.code, true); }
+};
+
+$("close").onclick = async () => {
+  try {
+    await setDoc(roomRef, { isOpen: false, endsAt: Timestamp.now(), updatedAt: serverTimestamp() }, { merge: true });
+    msg("已截止");
+  } catch (err) { msg("截止失敗：" + err.code, true); }
+};
+
+function msg(text, isError) {
+  $("admin-message").className = isError ? "message error" : "message";
+  $("admin-message").textContent = text;
+}
+
+// ── 即時結果 ──────────────────────────────────────────────────────────────
+let watchedQid = null;
+function watchResults(qid) {
+  if (qid === watchedQid) return;
+  watchedQid = qid;
+  if (unsubResults) { unsubResults(); unsubResults = null; }
+  const list = $("result-list");
+  if (!qid) { list.textContent = "尚無作答結果"; $("answer-count").textContent = "0 人作答"; return; }
+  unsubResults = onSnapshot(query(answersCol, where("qid", "==", qid)), snap => {
+    const q = BY_ID[qid];
+    $("answer-count").textContent = `${snap.size} 人作答`;
+    list.replaceChildren();
+    if (!q) return;
+    if (q.type === "word") { list.textContent = "文字雲作答請見下方。"; return; }
+    const counts = {};
+    snap.forEach(d => { const a = d.data().answer; counts[a] = (counts[a] || 0) + 1; });
+    const max = Math.max(1, ...Object.values(counts));
+    const correct = answerKey[qid];
+    q.options.forEach((option, i) => {
+      const count = counts[String(i)] || 0;
+      const row = document.createElement("div");
+      row.className = "result-row" + (correct === i ? " correct" : "");
+      const label = document.createElement("span");
+      label.className = "result-label";
+      label.textContent = `${String.fromCharCode(65 + i)}. ${option}${correct === i ? " ✓" : ""}`;
+      const bg = document.createElement("div"); bg.className = "bar-bg";
+      const bar = document.createElement("div"); bar.className = "bar";
+      bar.style.width = `${count / max * 100}%`;
+      bg.append(bar);
+      const num = document.createElement("span"); num.className = "result-count"; num.textContent = count;
+      row.append(label, bg, num);
+      list.append(row);
+    });
+  }, err => { list.textContent = "讀取結果失敗：" + err.code; });
+}
+
+// ── 文字雲 ────────────────────────────────────────────────────────────────
+function watchCloud() {
+  if (unsubCloud) unsubCloud();
+  unsubCloud = onSnapshot(query(answersCol, where("qid", "==", cloudPhase + "_word")), snap => {
+    const counts = {};
+    snap.forEach(d => { const w = (d.data().answer || "").trim(); if (w) counts[w] = (counts[w] || 0) + 1; });
+    const words = Object.entries(counts).map(([word, count]) => ({ word, count }))
+      .sort((a, b) => b.count - a.count || a.word.localeCompare(b.word));
+    drawCloud(words);
+  }, () => drawCloud([]));
+}
+for (const p of ["pre", "post"]) {
+  $("cloud-" + p).onclick = () => {
+    cloudPhase = p;
+    $("cloud-pre").classList.toggle("active", p === "pre");
+    $("cloud-post").classList.toggle("active", p === "post");
+    watchCloud();
+  };
+}
+$("save-cloud").onclick = () => {
+  const a = document.createElement("a");
+  a.href = $("cloud").toDataURL("image/png");
+  a.download = `mev-${cloudPhase}-wordcloud.png`;
+  a.click();
+};
+function drawCloud(words) {
+  const c = $("cloud"), ctx = c.getContext("2d"), W = c.width, H = c.height;
+  ctx.fillStyle = "#f9fcfa"; ctx.fillRect(0, 0, W, H);
+  if (!words.length) {
+    ctx.fillStyle = "#77908a"; ctx.font = "28px sans-serif"; ctx.textAlign = "center";
+    ctx.fillText("尚無文字雲作答", W / 2, H / 2); return;
+  }
+  const colors = ["#087866", "#157e97", "#bf633e", "#566d9c", "#89704a"];
+  const boxes = [], sorted = words.slice(0, 50), max = sorted[0].count;
+  for (let wi = 0; wi < sorted.length; wi++) {
+    const item = sorted[wi];
+    const size = Math.round(22 + 47 * Math.sqrt(item.count / max));
+    let placed = false;
+    for (let s = size; s >= 18 && !placed; s -= 3) {
+      ctx.font = `700 ${s}px "PingFang TC",sans-serif`;
+      const bw = ctx.measureText(item.word).width + 14, bh = s + 11;
+      for (let t = 0; t < 950 && !placed; t++) {
+        const angle = t * 2.4, r = 5 * Math.sqrt(t);
+        const x = W / 2 + Math.cos(angle) * r, y = H / 2 + Math.sin(angle) * r;
+        const b = { x: x - bw / 2, y: y - bh / 2, w: bw, h: bh };
+        if (b.x < 15 || b.y < 15 || b.x + b.w > W - 15 || b.y + b.h > H - 15) continue;
+        if (boxes.some(o => !(b.x + b.w < o.x || o.x + o.w < b.x || b.y + b.h < o.y || o.y + o.h < b.y))) continue;
+        boxes.push(b);
+        ctx.fillStyle = colors[wi % colors.length];
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(item.word, x, y);
+        placed = true;
+      }
+    }
+  }
+}
+
+// ── CSV 匯出 ──────────────────────────────────────────────────────────────
+function downloadCsv(rows, filename) {
+  const esc = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const body = rows.map(r => r.map(esc).join(",")).join("\r\n");
+  const blob = new Blob(["﻿" + body], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob), a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+const fmt = ts => ts?.toDate ? ts.toDate().toLocaleString("zh-TW", { hour12: false }) : "";
+
+async function loadAll() {
+  const [ss, as] = await Promise.all([getDocs(studentsCol), getDocs(answersCol)]);
+  return {
+    students: ss.docs.map(d => d.data()).sort((a, b) => (a.sid > b.sid ? 1 : -1)),
+    answers: as.docs.map(d => d.data()),
+  };
+}
+
+$("scores").onclick = async () => {
+  try {
+    const { students, answers } = await loadAll();
+    const byStudent = {};
+    answers.forEach(a => { (byStudent[a.sid] ||= {})[a.qid] = a.answer; });
+    const rows = [["學號", "姓名", "前測得分/5", "後測得分/5", "前測作答題數", "後測作答題數"]];
+    for (const s of students) {
+      const a = byStudent[s.sid] || {};
+      const score = p => QUESTIONS.filter(q => q.phase === p && q.type === "choice")
+        .reduce((n, q) => n + (answerKey[q.id] !== undefined && a[q.id] === String(answerKey[q.id]) ? 1 : 0), 0);
+      const done = p => QUESTIONS.filter(q => q.phase === p && q.type === "choice")
+        .reduce((n, q) => n + (a[q.id] !== undefined ? 1 : 0), 0);
+      rows.push([s.sid, s.name, score("pre"), score("post"), done("pre"), done("post")]);
+    }
+    downloadCsv(rows, "mev-scores.csv");
+    msg(Object.keys(answerKey).length ? "已下載成績 CSV" : "已下載，但尚未匯入正解，得分皆為 0", !Object.keys(answerKey).length);
+  } catch (err) { msg("匯出失敗：" + err.code, true); }
+};
+
+$("answers-csv").onclick = async () => {
+  try {
+    const { answers } = await loadAll();
+    answers.sort((a, b) => (a.sid + a.qid > b.sid + b.qid ? 1 : -1));
+    const rows = [["學號", "姓名", "階段", "題號", "題型", "題目", "回答", "正確答案", "得分", "作答時間"]];
+    for (const a of answers) {
+      const q = BY_ID[a.qid] || {};
+      const key = answerKey[a.qid];
+      const ans = q.type === "choice" ? (q.options?.[Number(a.answer)] ?? a.answer) : a.answer;
+      const correct = q.type === "choice" && key !== undefined ? q.options[key] : "";
+      const score = q.type === "choice" && key !== undefined ? (a.answer === String(key) ? 1 : 0) : "";
+      rows.push([a.sid, a.name, a.phase, a.qid, a.type, q.text || "", ans, correct, score, fmt(a.submittedAt)]);
+    }
+    downloadCsv(rows, "mev-answers.csv");
+    msg("已下載逐題答案 CSV");
+  } catch (err) { msg("匯出失敗：" + err.code, true); }
+};
+
+// ── 時間到自動截止 ────────────────────────────────────────────────────────
+setInterval(async () => {
+  if (!room) return;
+  $("room-status").textContent = isOpen() ? `作答中 · ${remainingSec()} 秒` : "未開放";
+  if (room.isOpen && remainingSec() === 0 && !autoClosing) {
+    autoClosing = true;
+    try { await setDoc(roomRef, { isOpen: false, updatedAt: serverTimestamp() }, { merge: true }); }
+    catch (_) { /* ignore */ }
+    finally { autoClosing = false; }
+  }
+}, 1000);
+</script>
+</body>
+</html>
