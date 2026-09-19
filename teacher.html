@@ -126,7 +126,8 @@ $("login-form").addEventListener("submit", async e => {
 $("logout").onclick = () => signOut(auth).then(() => location.reload());
 
 onAuthStateChanged(auth, user => {
-  if (!user) { $("login-view").classList.remove("hidden"); $("teacher-view").classList.add("hidden"); return; }
+  // 匿名（學生）身分不算教師：仍顯示登入畫面
+  if (!user || user.isAnonymous) { $("login-view").classList.remove("hidden"); $("teacher-view").classList.add("hidden"); return; }
   $("login-view").classList.add("hidden");
   $("teacher-view").classList.remove("hidden");
   start();
