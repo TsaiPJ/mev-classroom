@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Microbial EVs 課堂問答</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body class="student">
+<main class="student-shell">
+  <header>
+    <div class="eyebrow" id="course-subtitle">2026 微生物致病學</div>
+    <h1 id="course-title">Microbial EVs<br>課堂問答</h1>
+    <p>請先輸入學號與姓名，再依照老師開放的題目作答。</p>
+  </header>
+
+  <section id="join" class="panel hidden">
+    <h2>進入活動</h2>
+    <form id="join-form">
+      <label>學號<input id="sid" name="sid" autocomplete="off" maxlength="40" required></label>
+      <label>姓名<input id="name" name="name" autocomplete="name" maxlength="60" required></label>
+      <button type="submit" id="join-btn">開始作答</button>
+    </form>
+    <p id="join-message" class="message" role="status"></p>
+  </section>
+
+  <section id="activity" class="panel hidden">
+    <div class="status-row"><span id="student-name"></span><span id="phase">等候中</span></div>
+    <div id="question"></div>
+    <p id="student-message" class="message" role="status"></p>
+  </section>
+
+  <section id="loading" class="panel"><p>連線中…</p></section>
+
+  <footer>每題只能送出一次。作答截止後，請等老師開放下一題。</footer>
+</main>
+
+<script src="firebase-config.js"></script>
+<script src="questions.js"></script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+import { getFirestore, doc, setDoc, getDoc, onSnapshot, serverTimestamp, collection }
+  from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+const $ = id => document.getElementById(id);
+const ROOM = window.MEV_ROOM_ID;
+const BY_ID = window.MEV_BY_ID;
+
+if (window.MEV_COURSE_TITLE) $("course-title").innerHTML = `${window.MEV_COURSE_TITLE}<br>課堂問答`;
+if (window.MEV_COURSE_SUBTITLE) $("course-subtitle").textContent = window.MEV_COURSE_SUBTITLE;
+
+const app = initializeApp(window.MEV_FIREBASE_CONFIG);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const roomRef = doc(db, "mevQuiz", ROOM);
+const studentsCol = collection(db, "mevQuiz", ROOM, "students");
+const answersCol = collection(db, "mevQuiz", ROOM, "answers");
+
+let me = null;              // {sid, name}
+let uid = null;
+let room = null;
+let renderedSig = null;
+let answeredQids = new Set();
+let busy = false;
+
+function remainingSec() {
+  if (!room || !room.isOpen || !room.endsAt) return 0;
+  return Math.max(0, Math.ceil((room.endsAt.toMillis() - Date.now()) / 1000));
+}
+function isOpen() { return !!(room && room.isOpen && remainingSec() > 0); }
+
+signInAnonymously(auth).catch(err => {
+  $("loading").innerHTML = `<p class="message error">無法連線：${err.code}。請確認 Firebase 的匿名登入已開啟。</p>`;
+});
+
+onAuthStateChanged(auth, user => {
+  if (!user) return;
+  uid = user.uid;
+  const sid = localStorage.getItem("mev_sid"), name = localStorage.getItem("mev_name");
+  $("loading").classList.add("hidden");
+  if (sid && name) { me = { sid, name }; enterActivity(); } else { $("join").classList.remove("hidden"); }
+  onSnapshot(roomRef, snap => { room = snap.exists() ? snap.data() : null; renderMaybe(); },
+    err => { $("student-message").textContent = "連線中斷，正在重試…（" + err.code + "）"; });
+});
+
+$("join-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const sid = $("sid").value.trim().slice(0, 40), name = $("name").value.trim().slice(0, 60);
+  if (!sid || !name) return;
+  $("join-btn").disabled = true;
+  $("join-message").className = "message";
+  $("join-message").textContent = "登記中…";
+  try {
+    await setDoc(doc(studentsCol, sid), { sid, name, uid, joinedAt: serverTimestamp() }, { merge: true });
+    localStorage.setItem("mev_sid", sid);
+    localStorage.setItem("mev_name", name);
+    me = { sid, name };
+    $("join").classList.add("hidden");
+    enterActivity();
+  } catch (err) {
+    $("join-message").className = "message error";
+    $("join-message").textContent = err.code === "permission-denied"
+      ? "此學號已由其他人／其他裝置使用，且姓名不符。請確認學號與姓名，或請老師協助。"
+      : "登記失敗：" + err.code;
+  } finally {
+    $("join-btn").disabled = false;
+  }
+});
+
+function enterActivity() {
+  $("activity").classList.remove("hidden");
+  $("student-name").textContent = `${me.name}（${me.sid}）`;
+  renderMaybe();
+}
+
+async function alreadyAnswered(qid) {
+  if (answeredQids.has(qid)) return true;
+  try {
+    const snap = await getDoc(doc(answersCol, `${me.sid}__${qid}`));
+    if (snap.exists()) { answeredQids.add(qid); return true; }
+  } catch (_) { /* 讀不到就當作未作答，送出時仍會被規則擋下 */ }
+  return false;
+}
+
+async function renderMaybe() {
+  if (!me || !room) return;
+  const q = BY_ID[room.questionId];
+  $("phase").textContent = q ? (q.phase === "pre" ? "課前測驗" : "課後測驗") : "等候中";
+  const sig = [room.questionId, isOpen(), answeredQids.has(room.questionId)].join("|");
+  if (sig === renderedSig) return;
+  renderedSig = sig;
+  await renderQuestion(q);
+}
+
+async function renderQuestion(q) {
+  const root = $("question");
+  root.replaceChildren();
+  $("student-message").textContent = "";
+  $("student-message").className = "message";
+  if (!q) { root.innerHTML = "<p>老師尚未開始活動。</p>"; return; }
+
+  const title = document.createElement("div");
+  title.className = "question-title";
+  title.textContent = q.text;
+  root.append(title);
+
+  if (!isOpen()) { const p = document.createElement("p"); p.textContent = "這題已截止。請等候老師開放下一題。"; root.append(p); return; }
+
+  const timer = document.createElement("div");
+  timer.className = "timer"; timer.id = "countdown";
+  timer.textContent = `剩餘 ${remainingSec()} 秒`;
+  root.append(timer);
+
+  if (await alreadyAnswered(q.id)) { $("student-message").textContent = "已送出，請等候下一題。"; return; }
+
+  if (q.type === "choice") {
+    q.options.forEach((o, i) => {
+      const b = document.createElement("button");
+      b.className = "option";
+      b.textContent = `${String.fromCharCode(65 + i)}. ${o}`;
+      b.onclick = () => submit(q.id, String(i));
+      root.append(b);
+    });
+  } else {
+    const form = document.createElement("form");
+    form.className = "word-form";
+    const inp = document.createElement("input");
+    inp.placeholder = "請輸入一個關鍵詞（最多 25 字）"; inp.maxLength = 25; inp.required = true;
+    const btn = document.createElement("button"); btn.textContent = "送出";
+    form.append(inp, btn);
+    form.onsubmit = e => { e.preventDefault(); submit(q.id, inp.value); };
+    root.append(form);
+  }
+}
+
+async function submit(qid, answer) {
+  if (busy) return;
+  const q = BY_ID[qid];
+  if (q.type === "word") {
+    answer = answer.split(/\s+/).filter(Boolean).join(" ");
+    if (!answer || answer.length > 25) { $("student-message").textContent = "請輸入 1–25 字的關鍵詞"; return; }
+  }
+  busy = true;
+  document.querySelectorAll("#question button").forEach(b => b.disabled = true);
+  try {
+    await setDoc(doc(answersCol, `${me.sid}__${qid}`), {
+      sid: me.sid, name: me.name, uid, qid,
+      phase: q.phase, type: q.type, answer,
+      submittedAt: serverTimestamp(),
+    });
+    answeredQids.add(qid);
+    renderedSig = null;
+    $("student-message").textContent = "已送出，請等候下一題。";
+    renderMaybe();
+  } catch (err) {
+    $("student-message").className = "message error";
+    $("student-message").textContent = err.code === "permission-denied"
+      ? "作答時間已結束，或這題已作答過。" : "送出失敗：" + err.code;
+    document.querySelectorAll("#question button").forEach(b => b.disabled = false);
+  } finally { busy = false; }
+}
+
+setInterval(() => {
+  const c = $("countdown");
+  if (c) {
+    const r = remainingSec();
+    c.textContent = `剩餘 ${r} 秒`;
+    if (r === 0) { renderedSig = null; renderMaybe(); }
+  }
+}, 1000);
+</script>
+</body>
+</html>
