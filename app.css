@@ -1,0 +1,76 @@
+:root{font-family:-apple-system,BlinkMacSystemFont,"Noto Sans TC","PingFang TC",sans-serif;color:#142c34;background:#f5f7f5;font-size:16px}
+*{box-sizing:border-box}
+body{margin:0}
+h1,h2,p{margin-top:0}
+h1{font-size:clamp(2rem,4vw,3rem);line-height:1.13;letter-spacing:-.03em}
+h2{font-size:1.22rem}
+p{line-height:1.55;color:#586b6d}
+.eyebrow{font-size:.8rem;letter-spacing:.14em;font-weight:800;text-transform:uppercase;color:#147c74;margin-bottom:1rem}
+.student-shell{max-width:700px;margin:auto;padding:clamp(24px,5vw,60px) 20px}
+.student header{padding:16px 0 24px}
+.student header p{max-width:32rem}
+.panel{background:white;border:1px solid #dfe9e4;border-radius:20px;padding:clamp(22px,3vw,32px);box-shadow:0 8px 30px rgba(14,52,45,.045)}
+.panel+.panel{margin-top:18px}
+.hidden{display:none!important}
+label{display:block;font-weight:700;font-size:.92rem;margin:0 0 16px}
+input,select{display:block;width:100%;padding:13px 14px;border:1px solid #b9cbc5;border-radius:10px;background:white;font:inherit;color:#142c34;margin-top:7px}
+input:focus,select:focus{outline:3px solid #bce7d6;border-color:#147c74}
+button,.button{display:inline-flex;justify-content:center;align-items:center;border:0;border-radius:10px;background:#087866;color:white;padding:12px 17px;font:inherit;font-weight:750;text-decoration:none;cursor:pointer;min-height:45px}
+button:hover,.button:hover{filter:brightness(.92)}
+button:disabled{opacity:.55;cursor:default;filter:none}
+button.secondary,.button.secondary{background:#e5f0eb;color:#13564d}
+.student form button{width:100%}
+.status-row,.section-title{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.status-row{font-size:.87rem;color:#57716b;margin-bottom:25px}
+.status-row span:last-child,.badge{background:#e5f0eb;padding:5px 10px;border-radius:100px;color:#13564d;font-weight:750}
+.question-title{font-size:1.42rem;line-height:1.42;font-weight:750;margin:0 0 20px}
+.timer{font-size:1.1rem;color:#bb553b;font-weight:800;margin:0 0 18px}
+.option{display:flex;gap:12px;width:100%;justify-content:flex-start;text-align:left;margin:10px 0;background:#eef5f1;color:#173b36;border:2px solid transparent}
+.option:hover{border-color:#53ac93}
+.option:disabled{opacity:.6}
+.word-form{display:flex;gap:10px}
+.word-form input{margin:0}
+.message{min-height:1.3em;margin:15px 0 0;font-weight:650;color:#1a6c5c}
+.message.error{color:#b1462c}
+footer{font-size:.86rem;color:#748581;margin:24px 0}
+.teacher-shell{max-width:1260px;padding:32px 22px;margin:auto}
+.teacher-head{display:flex;justify-content:space-between;gap:20px;align-items:end;margin:0 0 24px}
+.teacher-head h1{font-size:2.3rem;margin-bottom:7px}
+.teacher-head p{margin-bottom:0}
+.teacher-actions,.cloud-actions{display:flex;flex-wrap:wrap;gap:8px}
+.section-title{margin-bottom:20px}
+.section-title h2{margin:0}
+.teacher-grid{display:grid;grid-template-columns:320px 1fr;gap:18px}
+.join-card #qr{width:220px;height:220px;display:flex;align-items:center;justify-content:center;margin:0 auto 17px}
+.join-card #qr img,.join-card #qr canvas{width:220px!important;height:220px!important}
+.join-card a{word-break:break-all;display:block;color:#087866;font-weight:700}
+.join-card p{font-size:.84rem;margin:12px 0 0}
+.time-row{display:flex;gap:16px;align-items:end}
+.time-row label{width:180px;margin:0}
+.time-row>div{display:flex;gap:8px;margin-bottom:0}
+.current-question{margin-top:24px;font-size:1.16rem;font-weight:700}
+.results,.cloud-panel{margin-top:18px}
+.result-list{display:grid;gap:8px}
+.result-row{display:flex;align-items:center;gap:14px}
+.result-label{min-width:210px;max-width:50%;font-weight:600}
+.bar-bg{flex:1;height:15px;border-radius:99px;background:#e8efeb;overflow:hidden}
+.bar{height:100%;background:#36a588;transition:width .3s ease}
+.result-row.correct .bar{background:#087866}
+.result-count{min-width:40px;text-align:right;font-weight:750}
+.cloud-actions .active{outline:2px solid #087866}
+canvas#cloud{width:100%;max-height:480px;border:1px solid #e6eee9;border-radius:14px;background:#f9fcfa}
+.cloud-panel p{font-size:.84rem;margin:12px 0 0}
+.login-shell{max-width:440px;margin:auto;padding:clamp(28px,6vw,80px) 20px}
+.login-shell h1{font-size:1.9rem}
+.roster{max-height:220px;overflow:auto;font-size:.9rem;color:#4b6460;line-height:1.9}
+.roster span{display:inline-block;background:#eef5f1;border-radius:99px;padding:2px 10px;margin:0 6px 6px 0}
+.hint{font-size:.84rem;color:#8a9a95;margin:10px 0 0}
+@media(max-width:800px){
+.teacher-head,.time-row{display:block}
+.teacher-actions{margin-top:16px}
+.teacher-grid{grid-template-columns:1fr}
+.time-row>div{margin-top:12px}
+.result-label{min-width:120px}
+.word-form{display:block}
+.word-form button{width:100%;margin-top:10px}
+}
