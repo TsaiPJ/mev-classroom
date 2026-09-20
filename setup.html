@@ -61,7 +61,7 @@ $("login-form").addEventListener("submit", async e => {
 });
 
 onAuthStateChanged(auth, user => {
-  if (!user) return;
+  if (!user || user.isAnonymous) return;   // 匿名（學生）身分不算教師
   $("login-form").classList.add("hidden");
   $("seed").classList.remove("hidden");
   $("message").textContent = `已登入 ${user.email}，可以寫入正解。`;
